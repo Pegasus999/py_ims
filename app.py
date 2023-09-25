@@ -1,4 +1,5 @@
 import sys
+from PyQt5 import QtGui
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -20,6 +21,8 @@ from PyQt5.QtCore import QDate
 from PyQt5.QtCore import Qt
 import sqlite3
 import uuid
+
+# Charges / Credits
 
 
 class AddPopup(QDialog):
@@ -87,6 +90,16 @@ class SecondWindow(QMainWindow):
         left_table = QTableWidget(0, 7)
         right_table = QTableWidget(0, 6)
 
+        # Search bar
+        search_field = QLineEdit()
+        search_button = QPushButton("Search")
+        self.search_field = search_field
+        search_button.clicked.connect(self.search_products)
+
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(search_field, stretch=4)  # Takes 80% of width
+        search_layout.addWidget(search_button, stretch=1)
+
         # Configure tables (e.g., headers, columns)
         # ...
         column_labels1 = [
@@ -98,7 +111,6 @@ class SecondWindow(QMainWindow):
             "Inserted On",
             "Profit",
         ]
-        left_table.setHorizontalHeaderLabels(column_labels1)
         column_labels2 = [
             "id",
             "Name",
@@ -107,15 +119,16 @@ class SecondWindow(QMainWindow):
             "Buying Price",
             "Profit",
         ]
+
+        left_table.setHorizontalHeaderLabels(column_labels1)
         right_table.setHorizontalHeaderLabels(column_labels2)
+        left_table.setColumnHidden(0, True)
+        left_table.setColumnHidden(3, True)
+        left_table.setColumnHidden(6, True)
         right_table.setColumnHidden(0, True)
         right_table.setColumnHidden(4, True)
         right_table.setColumnHidden(5, True)
         left_table.setColumnHidden(0, True)
-
-        layout.addWidget(left_table, 0, 0, 1, 1)  # 1 row, 1 column
-
-        layout.addWidget(right_table, 0, 1, 1, 1)  # 1 row, 1 column
 
         # Labels and Checkout Button (Row 1)
         total_title = QLabel("Total:")
@@ -135,25 +148,38 @@ class SecondWindow(QMainWindow):
         labels_layout.addWidget(delete_button)
         labels_layout.addWidget(checkout_button)
 
-        layout.addLayout(labels_layout, 1, 0, 1, 2)
+        # Main layout structure
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(search_layout)
+        main_layout.addWidget(left_table, stretch=1)  # Takes 50% of width
+        right_top_layout = QVBoxLayout()
+        right_top_layout.addWidget(right_table, stretch=6)  # Takes 60% of height
+        right_top_layout.addLayout(labels_layout)  # Labels and buttons
+        main_layout.addLayout(right_top_layout, stretch=1)  # Takes 50% of width
+        layout.addLayout(main_layout, 0, 0, 1, 1)
+
         self.right_table = right_table
         self.left_table = left_table
-
-        self.fillTable(left_table)
 
         left_table.itemDoubleClicked.connect(self.product_clicked)
         delete_button.clicked.connect(self.product_removed)
         right_table.itemClicked.connect(self.clicked)
         self.selected = 0
 
-    def fillTable(self, left_table):
-        db_cursor.execute("SELECT * FROM Products")
-        data = db_cursor.fetchall()
+    def fillTable(self, left_table, result):
+        # Fill the left table with all products initially
+        if result == None:
+            db_cursor.execute("SELECT * FROM Products")
+            data = db_cursor.fetchall()
+        else:
+            data = result
+
         left_table.setRowCount(0)  # Clear existing rows
 
         for row_index, row_data in enumerate(data):
             left_table.insertRow(row_index)
-            for col_index, cell_data in enumerate(row_data):  # Include the ID field
+            # Include the ID field
+            for col_index, cell_data in enumerate(row_data):
                 item = QTableWidgetItem(str(cell_data))
 
                 # Set profit column as uneditable
@@ -162,34 +188,55 @@ class SecondWindow(QMainWindow):
 
                 left_table.setItem(row_index, col_index, item)
 
+    def search_products(self):
+        # Handle the search button click and populate the left table based on the search query
+        query = self.search_field.text()
+        if query:
+            self.populateLeftTable(query)
+        else:
+            # If the search query is empty, display all products
+            self.fillTable(self.left_table, None)
+
+    def populateLeftTable(self, query):
+        if query != "":
+            db_cursor.execute(
+                "SELECT * FROM Products WHERE Name LIKE ? AND Quantity > 0",
+                ("%" + query + "%",),
+            )
+            data = db_cursor.fetchall()
+            self.fillTable(self.left_table, data)
+        else:
+            self.fillTable(self.left_table, None)
+
     def add_to_profits(self, item_data):
         today_date = QDate.currentDate().toString("yyyy-MM-dd")
         db_cursor.execute(
-            "SELECT quantity FROM Profits WHERE name = ?", (item_data["name"],)
+            "SELECT quantity FROM Profits WHERE name = ? AND price = ? AND date = ?",
+            (item_data["name"], item_data["price"], today_date),
         )
         existing_row = db_cursor.fetchone()
 
         if existing_row:
             # Update the existing row by adding the new quantity
             updated_quantity = existing_row[0] + int(item_data["quantity"])
-            print(updated_quantity)
+
             db_cursor.execute(
                 """
                 UPDATE Profits
                 SET quantity = ?,
-                    profit = ?,
-                    date = ?
-                WHERE name = ?
+                    profit = ?
+                WHERE name = ? AND price = ? AND date = ?
                 """,
                 (
                     updated_quantity,
                     item_data["profit"],
-                    today_date,
                     item_data["name"],
+                    item_data["price"],
+                    today_date,
                 ),
             )
         else:
-            # Insert a new row if the item doesn't exist
+            # Insert a new row if the item doesn't exist for today's date
             db_cursor.execute(
                 """
                 INSERT INTO Profits (id, name, price, quantity, profit, date)
@@ -205,6 +252,7 @@ class SecondWindow(QMainWindow):
                 ),
             )
         db_connection.commit()
+
         if item_data["id"] != "MANUAL":
             query = f"UPDATE Products SET quantity = quantity - {int(item_data['quantity'])} WHERE id = '{item_data['id']}'"
             db_cursor.execute(query)
@@ -219,9 +267,11 @@ class SecondWindow(QMainWindow):
                 "quantity": self.right_table.item(row, 3).text(),
                 "profit": self.right_table.item(row, 5).text(),
             }
+
             self.add_to_profits(item_data)
         self.right_table.setRowCount(0)
         self.count_total()
+        load_data()
 
     def show_add_dialog(self):
         add_dialog = AddPopup(self)
@@ -318,6 +368,7 @@ class SecondWindow(QMainWindow):
                 str(float(price_item.text()) - float(buyingPrice_item.text()))
             ),
         )
+        self.left_table.setRowCount(0)
         self.count_total()
 
     def count_total(self):
@@ -327,6 +378,13 @@ class SecondWindow(QMainWindow):
             quantity = int(self.right_table.item(row, 3).text())
             total_price += price * quantity
         self.total_label.setText(str(total_price))
+
+    def closeEvent(self, a0) -> None:
+        self.search_field.setText("")
+        self.left_table.setRowCount(0)
+        self.right_table.setRowCount(0)
+        self.count_total()
+        return super().closeEvent(a0)
 
 
 class SearchDialog(QDialog):
@@ -385,6 +443,7 @@ class AddDialog(QDialog):
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
         self.button_box.accepted.connect(self.accept)
+        self.button_box.accepted.connect(add_new_row)
         self.button_box.rejected.connect(self.reject)
 
         layout.addWidget(self.button_box)
@@ -416,7 +475,7 @@ class AddDialog(QDialog):
 class ProfitWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Selling")
+        self.setWindowTitle("Monthly Profit")
         self.setGeometry(100, 100, 500, 500)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -437,11 +496,11 @@ class ProfitWindow(QMainWindow):
         self.date_start.setDisplayFormat("yyyy-MM-dd")
         self.date_end.setDisplayFormat("yyyy-MM-dd")
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
+        self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(
-            ["Name", "Price", "Quantity", "Profit", "Date"]
+            ["Id", "Name", "Price", "Profit", "Quantity", "Date"]
         )
-
+        self.table.setColumnHidden(0, True)
         clear_button = QPushButton("CLEAR")
         cancel_button = QPushButton("CANCEL")
         clear_button.clicked.connect(self.clear_table)
@@ -468,6 +527,115 @@ class ProfitWindow(QMainWindow):
         self.query_database(self.date_start.text(), self.date_end.text())
         self.date_start.dateChanged.connect(self.date_changed)
         self.date_end.dateChanged.connect(self.date_changed)
+        self.table.itemClicked.connect(self.item_clicked)
+
+    def item_clicked(self, item):
+        self.selected = item.row()
+        self.table.itemChanged.connect(self.item_changed)
+
+    def item_changed(self, item):
+        self.table.itemChanged.disconnect(self.item_changed)
+        col = item.column()
+        row = item.row()
+        if col == 2:  # Check if the price column was edited
+            # Get the edited price
+            new_price = float(item.text())
+            if (
+                show_confirmation_dialog(
+                    "Are you sure you want to clear these records?"
+                )
+                == QMessageBox.Yes
+            ):
+                # Create a new profit row and update the original row's quantity
+                new_profit_row = self.create_profit_row(row, new_price)
+                self.update_quantity(row)
+                self.update_table_with_profit(new_profit_row)
+                self.query_database(self.date_start.text(), self.date_end.text())
+            else:
+                return
+
+    def update_quantity(self, row):
+        id = self.table.item(row, 0).text()
+        current_quantity = int(
+            self.table.item(row, 4).text()
+        )  # Assuming quantity is in the fourth column
+        new_quantity = current_quantity - 1
+
+        if new_quantity > 0:
+            # Update the quantity in the database
+            db_cursor.execute(
+                "UPDATE Profits SET quantity = ? WHERE id = ?", (new_quantity, id)
+            )
+        else:
+            # Remove the row from the database if quantity is 0
+            db_cursor.execute("DELETE FROM Profits WHERE id = ?", (id,))
+
+        # Update the quantity in the table
+        self.table.setItem(row, 4, QTableWidgetItem(str(new_quantity)))
+
+        # Commit the changes to the database
+        db_connection.commit()
+
+    def update_table_with_profit(self, profit_row):
+        # Add the new profit row to the table
+        row_position = self.table.rowCount()
+        self.table.insertRow(row_position)
+
+        # Populate the cells with the values from the profit row
+        self.table.setItem(row_position, 0, QTableWidgetItem(profit_row["id"]))
+        self.table.setItem(row_position, 1, QTableWidgetItem(profit_row["name"]))
+        self.table.setItem(row_position, 2, QTableWidgetItem(str(profit_row["price"])))
+        self.table.setItem(row_position, 3, QTableWidgetItem(str(profit_row["profit"])))
+        self.table.setItem(
+            row_position, 4, QTableWidgetItem(str(profit_row["quantity"]))
+        )
+        self.table.setItem(row_position, 5, QTableWidgetItem(profit_row["date"]))
+        db_cursor.execute(
+            """
+            INSERT INTO Profits (id, name, price, profit, quantity ,date)
+            VALUES (?, ?, ?, ?, ? ,?)
+        """,
+            (
+                profit_row["id"],
+                profit_row["name"],
+                profit_row["price"],
+                profit_row["profit"],
+                profit_row["quantity"],
+                profit_row["date"],
+            ),
+        )
+
+        db_connection.commit()
+        # Update the total profit
+        self.count_total()
+
+    def create_profit_row(self, row, new_price):
+        # Fetch the product details from the original row
+        product_name = self.table.item(
+            row, 1
+        ).text()  # Assuming name is in the second column
+        date = self.table.item(row, 5).text()
+
+        # Calculate the profit using the difference between old and new prices
+        old_price = float(
+            self.table.item(row, 2).text()
+        )  # Assuming old price is in the fourth column
+        old_profit = float(
+            self.table.item(row, 3).text()
+        )  # Assuming old profit is in the fifth column
+        new_profit = old_profit + (new_price - old_price)
+
+        # Create a new profit row as a dictionary
+        new_profit_row = {
+            "id": str(uuid.uuid4()),
+            "name": product_name,
+            "price": new_price,
+            "profit": new_profit,
+            "quantity": 1,
+            "date": date,
+        }
+
+        return new_profit_row
 
     def date_changed(self):
         new_start = self.date_start.text()
@@ -487,25 +655,25 @@ class ProfitWindow(QMainWindow):
             self.table.insertRow(row_index)
             for col_index, cell_data in enumerate(row_data):
                 item = QTableWidgetItem(str(cell_data))
-
-                if col_index == 1:
-                    self.table.setItem(row_index, 0, item)
-                elif col_index == 2:
-                    self.table.setItem(row_index, 1, item)
-                elif col_index == 3:
-                    self.table.setItem(row_index, 3, item)
-                elif col_index == 4:
-                    self.table.setItem(row_index, 2, item)
-                elif col_index == 5:
-                    self.table.setItem(row_index, 4, item)
+                self.table.setItem(row_index, col_index, item)
 
         self.count_total()
+
+    # id 0
+    # name 1
+    # price 2
+    # profit 3
+    # quantity 4
 
     def count_total(self):
         total_price = 0
         for row in range(self.table.rowCount()):
-            price = float(self.table.item(row, 3).text())
-            quantity = int(self.table.item(row, 2).text())
+            price = float(
+                self.table.item(row, 3).text()
+            )  # Assuming price is in the third column
+            quantity = int(
+                self.table.item(row, 4).text()
+            )  # Assuming quantity is in the fourth column
             total_price += price * quantity
         self.total_label.setText(f"Total Profit: {str(total_price)}")
 
@@ -522,8 +690,15 @@ class ProfitWindow(QMainWindow):
         else:
             return
 
+    def closeEvent(self, a0) -> None:
+        global profit_window
+        profit_window = None
+        return super().closeEvent(a0)
+
     def cancel_action(self):
         self.close()
+        global profit_window
+        profit_window = None
 
 
 def delete_row():
@@ -562,8 +737,9 @@ def showAlert(str):
 
 
 def add_new_row():
+    global add_dialog
     new_row_data = add_dialog.get_data()
-
+    add_dialog = None
     try:
         id = str(uuid.uuid4())
         selling_price = float(new_row_data["selling_price"])
@@ -589,6 +765,7 @@ def add_new_row():
         )
 
         db_connection.commit()
+
         load_data()
 
     except Exception as e:
@@ -602,7 +779,8 @@ def load_data():
 
     for row_index, row_data in enumerate(data):
         table_widget.insertRow(row_index)
-        for col_index, cell_data in enumerate(row_data):  # Include the ID field
+        # Include the ID field
+        for col_index, cell_data in enumerate(row_data):
             item = QTableWidgetItem(str(cell_data))
 
             # Set profit column as uneditable
@@ -724,7 +902,7 @@ db_cursor.execute(
 db_cursor.execute(
     """
      CREATE TABLE IF NOT EXISTS Profits (
-                id TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY, 
                 name TEXT,
                 price REAL,
                 profit REAL,
@@ -774,30 +952,44 @@ for button in buttons:
     button.setFixedHeight(50)  # Set button height
     buttons_layout.addWidget(button)
 
+second_window = None
+profit_window = None
+add_dialog = None
+
 
 def showSellWindow():
+    global second_window  # Declare the variable as global
+    if second_window is None:
+        second_window = SecondWindow()
     second_window.show()
 
 
 def showProfitWindow():
+    global profit_window  # Declare the variable as global
+    if profit_window is None:
+        profit_window = ProfitWindow()
     profit_window.show()
 
 
-add_button = buttons[0]
-add_dialog = AddDialog(window)
+def showAddWindow():
+    global add_dialog  # Declare the variable as global
+    if add_dialog is None:
+        add_dialog = AddDialog(window)
 
-second_window = SecondWindow()
-profit_window = ProfitWindow()
+    add_dialog.show()
+
+
+add_button = buttons[0]
 sell_button = buttons[3]
 sell_button.clicked.connect(showSellWindow)
 profit_button = buttons[4]
 profit_button.clicked.connect(showProfitWindow)
-add_button.clicked.connect(add_dialog.exec_)
+add_button.clicked.connect(showAddWindow)
 search_dialog = SearchDialog(table_widget)
 search_button = buttons[1]
 search_button.clicked.connect(search_dialog.exec_)
 delete_button = buttons[2]
-add_dialog.button_box.accepted.connect(add_new_row)
+
 delete_button.clicked.connect(delete_row)
 main_layout.addLayout(buttons_layout)
 
@@ -806,4 +998,5 @@ main_layout.addLayout(buttons_layout)
 load_data()
 
 window.show()
+
 sys.exit(app.exec_())
